@@ -1,0 +1,176 @@
+-- SQL STEPS FOLLOWED AS BELOW
+
+-- Create Schema:
+CREATE SCHEMA ubisoft_game;
+
+-- Create Table:
+DROP TABLE IF EXISTS game_feature_data;
+
+CREATE TABLE game_feature_data AS
+SELECT DISTINCT d1.build, 
+                d1.playtime, 
+                d1.fps, d1.date,
+		            d1.subfeature AS mode_data,
+                d2.subfeature AS map_data,
+                d3.subfeature AS skill_data
+FROM game_mode_data d1
+INNER JOIN game_map_data d2
+ON d2.build = d1.build AND
+   d2.date = d1.date
+INNER JOIN game_skill_data d3
+ON d3.build = d1.build AND
+   d3.date = d1.date;
+
+-- Rename Columns:
+ALTER TABLE game_feature_data
+RENAME COLUMN mode_data TO mode_feature;
+
+ALTER TABLE game_feature_data
+RENAME COLUMN map_data TO map_feature;
+
+ALTER TABLE game_feature_data
+RENAME COLUMN skill_data TO skill_feature;
+
+-- Add new column to get count:
+
+-- 1.	
+ALTER TABLE game_feature_data
+ADD COLUMN record_cnt INT;
+
+UPDATE game_feature_data
+SET record_cnt = (SELECT 
+	                      CASE WHEN build IS NULL THEN 0 ELSE 1 END);
+
+-- 2.	
+ALTER TABLE game_feature_data
+ADD COLUMN mode_feature_cnt int;
+
+UPDATE game_feature_data
+SET mode_feature_cnt = (SELECT 
+                              CASE WHEN mode_feature IS NULL THEN 0 ELSE 1 END);
+
+-- 3.	
+ALTER TABLE game_feature_data
+ADD COLUMN map_feature_cnt int;
+
+UPDATE game_feature_data
+SET map_feature_cnt = (SELECT 
+                             CASE WHEN map_feature IS NULL THEN 0 ELSE 1 END);
+
+-- 4.	
+ALTER TABLE game_feature_data
+ADD COLUMN skill_feature_cnt int;
+
+UPDATE game_feature_data
+SET skill_feature_cnt = (SELECT 
+                               CASE WHEN skill_feature IS NULL THEN 0 ELSE 1 END);
+
+
+-- Create Tables to get top & bottom 5:
+
+-- 1.	
+DROP TABLE IF EXISTS mode_feature_avg_fps;
+
+CREATE TABLE mode_feature_avg_fps AS
+SELECT mode_feature,
+	     ROUND(sum(fps) / NULLIF(sum(mode_feature_cnt),0),2) AS avg_fps,
+	     ROUND((sum(fps) / NULLIF(sum(mode_feature_cnt),0)) - (SELECT AVG(fps)
+			                                                       FROM game_feature_data),2) AS lag_from_avg_FPS
+FROM ubisoft_game.game_feature_data
+GROUP BY mode_feature
+ORDER BY lag_from_avg_fps;
+
+-- 2.	
+DROP TABLE IF EXISTS map_feature_avg_fps;
+CREATE TABLE map_feature_avg_fps AS
+SELECT map_feature,
+	ROUND(sum(fps) / NULLIF(sum(map_feature_cnt),0),2) AS avg_fps,
+	ROUND((sum(fps) / NULLIF(sum(map_feature_cnt),0)) - (SELECT AVG(fps)
+			                                            FROM game_feature_data),2) AS lag_from_avg_FPS
+FROM ubisoft_game.game_feature_data
+GROUP BY map_feature
+ORDER BY lag_from_avg_fps;
+
+-- 3.	
+DROP TABLE IF EXISTS skill_feature_avg_fps;
+CREATE TABLE skill_feature_avg_fps AS
+SELECT skill_feature,
+	     ROUND(sum(fps) / NULLIF(sum(skill_feature_cnt),0),2) AS avg_fps,
+	     ROUND((sum(fps) / NULLIF(sum(skill_feature_cnt),0)) - (SELECT AVG(fps)
+			                                                        FROM game_feature_data),2) AS lag_from_avg_FPS
+FROM ubisoft_game.game_feature_data
+GROUP BY skill_feature
+ORDER BY lag_from_avg_fps;
+
+
+-- Imported csv file (Renamed on excel and saved csv file)
+
+-- Add column to imported table converting string to date:
+
+-- 1.	
+ALTER TABLE game_hero_data
+ADD COLUMN date DATE;
+
+UPDATE game_hero_data
+SET date = STR_TO_DATE(serverdateid, '%Y%m%d');
+
+-- Rearrange columns in table:
+CREATE TABLE hero_date AS
+SELECT DISTINCT serverdateid, 
+                date, 
+                ldtitid, 
+                sessionid, 
+                buildversion, 
+                herogen,
+                herolvl,
+                herornwn
+FROM ubisoft_game.game_hero_data;
+
+DROP TABLE game_hero_data;
+
+ALTER TABLE hero_date
+RENAME TO game_hero_data;
+
+-- Create table to get testing cnt:
+CREATE TABLE testing_data AS
+SELECT date,
+	     buildversion,
+       COUNT(sessionid) as testing_cnt
+FROM ubisoft_game.game_hero_data
+GROUP BY date, buildversion
+ORDER BY testing_cnt;
+
+-- Get max and min date:
+
+-- 1.	
+SELECT MAX(date) 
+FROM game_hero_data;
+
+-- 2.	
+SELECT MIN(date) 
+FROM game_hero_data;
+
+-- Create date table from max and min dates:
+CREATE TABLE date_table AS
+SELECT DATE_ADD('2023-08-01', INTERVAL seq DAY) AS date
+FROM (SELECT seq
+      FROM (SELECT ROW_NUMBER() OVER () - 1 AS seq
+            FROM information_schema.columns) numbers
+WHERE DATE_ADD('2023-08-01', INTERVAL seq DAY) <= '2023-12-09') date_sequence;
+
+-- Create cross join table:
+CREATE TABLE cross_join AS
+SELECT DISTINCT dt.date,
+                ldtitid
+FROM date_table dt
+CROSS JOIN game_hero_data;
+
+-- Create not tested id table:
+CREATE TABLE not_tested_id AS
+SELECT DISTINCT cj.date,
+                cj.ldtitid
+FROM cross_join cj
+LEFT JOIN game_hero_data ghd
+ON ghd.date = cj.date AND
+   ghd.ldtitid = cj.ldtitid
+WHERE ghd.ldtitid IS NULL;
